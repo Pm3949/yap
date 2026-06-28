@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* ─── YAP Base Theme (always dark) ─────────────────────────────── */
+:root {
+  --background: #000000;
+  --foreground: #ededed;
+
+  /* Clerk CSS Variable Overrides */
+  --clerk-color-background: #18181b;
+  --clerk-color-neutral: #a1a1aa;
+  --clerk-color-primary: #7c3aed;
+  --clerk-color-primary-foreground: #ffffff;
+  --clerk-color-foreground: #ffffff;
+  --clerk-color-input: #27272a;
+  --clerk-color-input-foreground: #ffffff;
+  --clerk-color-muted: #27272a;
+  --clerk-color-muted-foreground: #a1a1aa;
+  --clerk-color-ring: #7c3aed;
+  --clerk-color-border: #3f3f46;
+  --clerk-color-danger: #f87171;
+  --clerk-color-success: #34d399;
+  --clerk-color-warning: #fbbf24;
+}
+
+/* ─── Body ──────────────────────────────────────────────────────── */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ─── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #09090b;
+}
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #7c3aed;
+}
+
+/* ─── Selection ─────────────────────────────────────────────────── */
+::selection {
+  background: #7c3aed40;
+  color: #ffffff;
+}
+
+/* Force Clerk social button borders */
+.cl-socialButtonsBlockButton {
+  border: 1px solid #52525b !important;
+  border-radius: 8px !important;
+}
+
+/* Fix Clerk divider */
+.cl-dividerLine {
+  background-color: #3f3f46 !important;
+}
+
+.cl-dividerText {
+  color: #71717a !important;
+  font-size: 12px !important;
+}
