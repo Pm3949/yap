@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { MapPin, Users, Loader2, Plus, Ghost, EyeOff, Eye, Search, Radio } from "lucide-react";
+import { MapPin, Users, Loader2, Plus, Ghost, EyeOff, Eye, Search, Radio, X } from "lucide-react";
 import io from "socket.io-client";
 import KnockModal from "@/components/KnockModal";
 import MapChatRoom from "@/components/MapChatRoom";
@@ -33,6 +33,12 @@ export default function MapPage() {
   const [searchTopic, setSearchTopic] = useState("");
   const [searchRadius, setSearchRadius] = useState(50000); // 50km default
   const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [myId, setMyId] = useState<string | undefined>(socket.id);
+
+  useEffect(() => {
+    socket.on("connect", () => setMyId(socket.id));
+    return () => { socket.off("connect"); }
+  }, []);
 
   // Fetch location ONCE on mount
   useEffect(() => {
@@ -142,6 +148,15 @@ export default function MapPage() {
     }
   };
 
+  const toggleGhostMode = () => {
+    if (!isGhost && isBroadcasting) {
+      // If we are entering Ghost Mode, we must stop broadcasting
+      socket.emit("stopBroadcast");
+      setIsBroadcasting(false);
+    }
+    setIsGhost(!isGhost);
+  };
+
   const handleJoinCluster = (clusterId: string) => {
     if (activeRoomId) return alert("You are already in a campfire!");
     setIsWaitingForKnock(true);
@@ -173,7 +188,7 @@ export default function MapPage() {
               YAP Map
             </h1>
             <button 
-              onClick={() => setIsGhost(!isGhost)}
+              onClick={toggleGhostMode}
               className={`p-2 rounded-full transition-colors ${isGhost ? 'bg-slate-700 text-slate-300' : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'}`}
               title={isGhost ? "Ghost Mode Active" : "Go Incognito"}
             >
@@ -188,7 +203,14 @@ export default function MapPage() {
         <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 rounded-full px-4 py-2 flex flex-col items-end gap-2 pointer-events-auto shadow-xl">
           <div className="flex items-center gap-2">
             <Users className="w-4 h-4 text-emerald-400" />
-            <span className="text-sm font-medium">{activeClusters.reduce((acc, c) => acc + (c.activeUsers || 1), 0)} nearby</span>
+            <span className="text-sm font-medium">
+              {activeClusters.reduce((acc, c) => {
+                const isMe = c.id === myId || c.creatorId === myId;
+                // Don't count the user themselves in the "nearby" count
+                const count = isMe ? Math.max(0, (c.activeUsers || 1) - 1) : (c.activeUsers || 1);
+                return acc + count;
+              }, 0)} nearby
+            </span>
           </div>
           
           <button 
@@ -259,6 +281,7 @@ export default function MapPage() {
           userLocation={isGhost ? null : userLocation} 
           activeClusters={activeClusters} 
           onClusterClick={handleJoinCluster} 
+          mySocketId={myId}
         />
 
         {/* Overlays */}
@@ -294,7 +317,7 @@ export default function MapPage() {
                     Start Fire
                   </button>
                   <button type="button" onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white p-2">
-                    <EyeOff className="w-4 h-4" />
+                    <X className="w-4 h-4" />
                   </button>
                 </form>
               ) : (

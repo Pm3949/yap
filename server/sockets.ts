@@ -18,7 +18,11 @@ export const setupSockets = (io: Server) => {
     });
 
     socket.on("disconnect", () => {
-      state.socketToUserId.delete(socket.id);
+      // We keep socketToUserId until the end of the event loop to allow sub-modules to use it during disconnect
+      setTimeout(() => {
+        state.socketToUserId.delete(socket.id);
+      }, 0);
+      
       state.waitingQueue = state.waitingQueue.filter((id) => id !== socket.id);
       state.textWaitingQueue = state.textWaitingQueue.filter(
         (id) => id !== socket.id,
@@ -391,7 +395,7 @@ const registerMapMode = (io: Server, socket: Socket) => {
   socket.on("fetchClusters", async ({ lat, lng, radius = 50000, topicFilter = "" }) => {
     try {
       let q = `
-        SELECT id, lat, lng, "activeUsers", topic, type
+        SELECT id, lat, lng, "activeUsers", topic, type, "creatorId"
         FROM "MapCluster"
         WHERE ST_DWithin(location, ST_SetSRID(ST_MakePoint($2, $1), 4326), $3)
           AND "updatedAt" > NOW() - INTERVAL '10 minutes'
@@ -521,7 +525,22 @@ const registerMapMode = (io: Server, socket: Socket) => {
   };
 
   socket.on("leaveMapRoom", () => handleLeaveMapRoom(socket.id));
-  socket.on("disconnect", () => handleLeaveMapRoom(socket.id));
+  
+  socket.on("disconnect", async () => {
+    // 1. Clean up active room if any
+    await handleLeaveMapRoom(socket.id);
+    
+    // 2. Clean up person broadcast
+    const userId = state.socketToUserId.get(socket.id) || socket.id;
+    try {
+      const res = await query(`DELETE FROM "MapCluster" WHERE id = $1 AND type = 'person' RETURNING id`, [userId]);
+      if (res.rowCount > 0) {
+        io.emit("removeMapUser", { id: userId });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  });
 };
 
 // Start TTL Cron Job in background (runs every minute to clean rooms > 10 mins old)

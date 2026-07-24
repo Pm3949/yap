@@ -34,12 +34,14 @@ interface MapComponentProps {
   userLocation: [number, number] | null;
   activeClusters: any[]; // We will type this properly later
   onClusterClick: (clusterId: string) => void;
+  mySocketId?: string;
 }
 
 export default function MapComponent({
   userLocation,
   activeClusters,
   onClusterClick,
+  mySocketId,
 }: MapComponentProps) {
   const [mounted, setMounted] = useState(false);
 
@@ -61,7 +63,7 @@ export default function MapComponent({
 
   const L = typeof window !== "undefined" ? require("leaflet") : null;
   
-  // Memoize the icon so it survives React hot-reloads
+  // Memoize the icons so they survive React hot-reloads
   const personIcon = useMemo(() => L ? L.divIcon({
     html: '<div style="font-size: 24px; text-shadow: 0 0 10px rgba(0,255,255,0.8); text-align: center;">👤</div>',
     className: 'custom-person-icon',
@@ -69,16 +71,43 @@ export default function MapComponent({
     iconAnchor: [15, 15]
   }) : undefined, [L]);
 
+  const myPersonIcon = useMemo(() => L ? L.divIcon({
+    html: '<div style="font-size: 28px; text-shadow: 0 0 15px rgba(255,165,0,0.9); text-align: center;">🧑‍💻</div>',
+    className: 'custom-my-person-icon',
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  }) : undefined, [L]);
+
+  const campfireIcon = useMemo(() => L ? L.divIcon({
+    html: '<div style="font-size: 26px; text-shadow: 0 0 10px rgba(249,115,22,0.8); text-align: center;">🔥</div>',
+    className: 'custom-campfire-icon',
+    iconSize: [30, 30],
+    iconAnchor: [15, 15]
+  }) : undefined, [L]);
+
   if (!mounted) return <div className="h-full w-full bg-slate-900 animate-pulse flex items-center justify-center text-white">Loading Map...</div>;
 
+  // Inner component to handle dynamic map centering
+  const MapUpdater = ({ center, zoom }: { center: [number, number], zoom: number }) => {
+    const { useMap } = require("react-leaflet");
+    const map = useMap();
+    useEffect(() => {
+      map.setView(center, zoom, { animate: true });
+    }, [center, zoom, map]);
+    return null;
+  };
+
   return (
-    <div className="h-full w-full relative z-0">
+    <div className="absolute inset-0 z-0">
       <MapContainer
-        center={userLocation || [51.505, -0.09]} // Default to London if no location
-        zoom={userLocation ? 13 : 3}
-        style={{ height: "100%", width: "100%" }}
+        center={userLocation || [17.3850, 78.4867]}
+        zoom={userLocation ? 14 : 3}
+        className="w-full h-full bg-slate-900"
         zoomControl={false}
       >
+        {/* Update center dynamically when userLocation changes */}
+        {userLocation && <MapUpdater center={userLocation} zoom={14} />}
+        
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -104,23 +133,38 @@ export default function MapComponent({
         {/* Active Clusters */}
         {activeClusters.map((cluster) => {
           const isPerson = cluster.type === 'person';
+          const isMe = !!(mySocketId && (cluster.id === mySocketId || cluster.creatorId === mySocketId));
           
+          let iconToUse = undefined;
+          if (isPerson) {
+            iconToUse = isMe ? myPersonIcon : personIcon;
+          } else {
+            iconToUse = campfireIcon;
+          }
+
           return (
             <Marker
               key={cluster.id}
               position={[cluster.lat, cluster.lng]}
-              icon={isPerson ? personIcon : undefined}
+              icon={iconToUse}
               eventHandlers={{
-                click: () => !isPerson && onClusterClick(cluster.id), // Disable knock on persons for now
+                click: () => !isPerson && !isMe && onClusterClick(cluster.id), // Disable knock on persons and self
               }}
             >
-              <Tooltip direction="top" offset={[0, -20]} opacity={1} permanent={!isPerson}>
+              <Tooltip direction="top" offset={[0, -20]} opacity={1} permanent={!isPerson || isMe}>
                 <div className="text-center font-sans">
-                  <p className="font-bold text-sm text-slate-800">{isPerson ? "Wanderer" : (cluster.topic || "Campfire")}</p>
+                  <p className="font-bold text-sm text-slate-800">
+                    {isMe 
+                      ? (isPerson ? "You" : `Your ${cluster.topic || "Campfire"}`) 
+                      : (isPerson ? "Wanderer" : (cluster.topic || "Campfire"))
+                    }
+                  </p>
                   {!isPerson && (
                     <>
-                      <p className="text-[10px] text-slate-500 font-medium">{cluster.activeUsers} yapping</p>
-                      <p className="text-[10px] text-blue-600 mt-1">Click to knock</p>
+                      <p className="text-[10px] text-slate-500 font-medium">
+                        {isMe ? `${Math.max(0, cluster.activeUsers - 1)} others` : `${cluster.activeUsers} yapping`}
+                      </p>
+                      {!isMe && <p className="text-[10px] text-blue-600 mt-1">Click to knock</p>}
                     </>
                   )}
                 </div>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
+import dynamic from "next/dynamic";
 import { useAuth } from "@/context/AuthContext";
 import {
   Video,
@@ -19,16 +20,85 @@ import {
   ArrowRight,
   Shield,
   Globe,
+  MapPin,
+  Flame,
 } from "lucide-react";
+
+// Dynamically import MapPreview so it doesn't try to load Leaflet during SSR
+const MapPreview = dynamic(() => import("@/components/MapPreview"), {
+  ssr: false,
+});
 
 export default function Home() {
   const { user, loading, signInWithGoogle, logout } = useAuth();
 
   // 🔥 FIX 1: Hydration error rokne ke liye isMounted state
   const [isMounted, setIsMounted] = useState(false);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([17.3850, 78.4867]);
+  const [campfires, setCampfires] = useState<any[]>([]);
+  const [selectedCampfire, setSelectedCampfire] = useState<any>(null);
+
   useEffect(() => {
     setIsMounted(true);
+    if (typeof window !== "undefined" && "geolocation" in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const lat = position.coords.latitude;
+          const lng = position.coords.longitude;
+          setMapCenter([lat, lng]);
+        },
+        (err) => console.log("Geolocation fallback to Hyderabad.")
+      );
+    }
   }, []);
+
+  // Set mock campfires around current mapCenter coordinates
+  useEffect(() => {
+    const lat = mapCenter[0];
+    const lng = mapCenter[1];
+    const list = [
+      {
+        id: "cf-1",
+        lat: lat + 0.004,
+        lng: lng - 0.005,
+        topic: "#LateNightCode",
+        activeUsers: 8,
+        vibe: "💻",
+        description: "Yapping about typescript errors and caffeine levels.",
+      },
+      {
+        id: "cf-2",
+        lat: lat - 0.005,
+        lng: lng + 0.006,
+        topic: "#MusicVibes",
+        activeUsers: 5,
+        vibe: "🎸",
+        description: "Shared playlists, indie discoveries, and concert gossip.",
+      },
+      {
+        id: "cf-3",
+        lat: lat + 0.003,
+        lng: lng + 0.005,
+        topic: "#DeepThoughts",
+        activeUsers: 12,
+        vibe: "🌌",
+        description: "Does free will exist? Is simulation theory real?",
+      },
+      {
+        id: "cf-4",
+        lat: lat - 0.004,
+        lng: lng - 0.004,
+        topic: "#ChaiTapri",
+        activeUsers: 6,
+        vibe: "☕",
+        description: "Casual banter and daily neighborhood updates.",
+      },
+    ];
+    setCampfires(list);
+    // Select first one by default for presentation
+    setSelectedCampfire(list[0]);
+  }, [mapCenter]);
+
 
   return (
     <div className="min-h-screen bg-[#050507] text-white selection:bg-violet-500/30 flex flex-col overflow-x-hidden font-sans">
@@ -221,6 +291,105 @@ export default function Home() {
           </p>
         </div>
       </main>
+
+      {/* --- LIVE CAMPFIRE MAP PREVIEW --- */}
+      <section className="w-full py-16 relative z-10 border-t border-b border-white/5 bg-[#09090c]/50">
+        <div className="max-w-6xl mx-auto px-6">
+          <div className="text-center mb-12">
+            <p className="text-xs font-bold tracking-[0.2em] uppercase text-orange-500 mb-3 flex items-center justify-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-ping" />
+              Live Map Preview
+            </p>
+            <h2 className="text-3xl md:text-5xl font-black tracking-tight mb-4">
+              Explore Live <span className="text-orange-500">Campfires</span>
+            </h2>
+            <p className="text-zinc-400 text-base max-w-xl mx-auto leading-relaxed">
+              Find active campfires, join anonymous text channels, and connect with people nearby. Drop a pin, select a vibe, and make them friends.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
+            {/* Left side details */}
+            <div className="lg:col-span-4 flex flex-col justify-between gap-6 bg-white/[0.02] border border-white/5 rounded-3xl p-6 backdrop-blur-xl">
+              <div>
+                <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                  <MapPin className="text-orange-500 w-5 h-5" />
+                  Campfires Near You
+                </h3>
+                <p className="text-zinc-500 text-xs leading-relaxed mb-6">
+                  Click a campfire on the map to view topic details and see how many yappers are active.
+                </p>
+
+                {/* Campfire list selector */}
+                <div className="space-y-3">
+                  {campfires.map((cf) => (
+                    <button
+                      key={cf.id}
+                      onClick={() => setSelectedCampfire(cf)}
+                      className={`w-full text-left p-3.5 rounded-2xl border transition-all duration-300 flex items-center justify-between ${
+                        selectedCampfire?.id === cf.id
+                          ? "bg-orange-500/10 border-orange-500/30 shadow-[0_0_15px_rgba(249,115,22,0.15)]"
+                          : "bg-white/[0.01] border-white/5 hover:bg-white/[0.03] hover:border-white/10"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl bg-zinc-900 w-10 h-10 rounded-xl flex items-center justify-center">
+                          {cf.vibe}
+                        </span>
+                        <div>
+                          <p className="font-bold text-sm text-white">{cf.topic}</p>
+                          <p className="text-[11px] text-zinc-500 truncate max-w-[150px]">{cf.description}</p>
+                        </div>
+                      </div>
+                      <span className="text-xs font-semibold bg-orange-500/20 text-orange-400 px-2.5 py-1 rounded-full whitespace-nowrap">
+                        {cf.activeUsers} online
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Selected Campfire highlight card */}
+              {selectedCampfire && (
+                <div className="bg-gradient-to-tr from-orange-500/10 to-rose-500/5 border border-orange-500/20 rounded-2xl p-4 mt-2">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-bold text-orange-400 tracking-wider uppercase">Active Vibe</span>
+                    <span className="text-[10px] text-zinc-500 flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                      Ephemeral
+                    </span>
+                  </div>
+                  <h4 className="font-bold text-white text-sm mb-1">{selectedCampfire.vibe} {selectedCampfire.topic}</h4>
+                  <p className="text-xs text-zinc-400 leading-normal">{selectedCampfire.description}</p>
+                </div>
+              )}
+
+              {/* CTA button to map */}
+              <Link
+                href="/map"
+                className="w-full py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-2xl font-bold text-base transition-all hover:scale-[1.02] active:scale-[0.98] shadow-[0_0_30px_-8px_rgba(234,88,12,0.6)] flex items-center justify-center gap-2 group"
+              >
+                Go to Live Map
+                <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
+              </Link>
+            </div>
+
+            {/* Right side interactive map */}
+            <div className="lg:col-span-8 min-h-[400px] lg:min-h-0 relative rounded-3xl overflow-hidden border border-white/5 bg-slate-950 p-2 group shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-tr from-orange-500/10 to-rose-500/10 opacity-30 blur-[40px] pointer-events-none rounded-3xl" />
+              <div className="w-full h-full min-h-[450px]">
+                {isMounted && (
+                  <MapPreview
+                    center={mapCenter}
+                    campfires={campfires}
+                    onCampfireClick={(cf) => setSelectedCampfire(cf)}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* --- HOW IT WORKS --- */}
       <section className="w-full py-28 relative z-10">
