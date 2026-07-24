@@ -18,6 +18,7 @@ async function setup() {
         "isLocked" BOOLEAN DEFAULT FALSE,
         "creatorId" VARCHAR(255),
         type VARCHAR(50) DEFAULT 'room',
+        "isPrivate" BOOLEAN DEFAULT FALSE,
         "updatedAt" TIMESTAMP DEFAULT NOW()
       );
       
@@ -26,6 +27,7 @@ async function setup() {
       ALTER TABLE "MapCluster" ADD COLUMN IF NOT EXISTS "isLocked" BOOLEAN DEFAULT FALSE;
       ALTER TABLE "MapCluster" ADD COLUMN IF NOT EXISTS "creatorId" VARCHAR(255);
       ALTER TABLE "MapCluster" ADD COLUMN IF NOT EXISTS type VARCHAR(50) DEFAULT 'room';
+      ALTER TABLE "MapCluster" ADD COLUMN IF NOT EXISTS "isPrivate" BOOLEAN DEFAULT FALSE;
     `);
     console.log("MapCluster table ready.");
     process.exit(0);

@@ -368,25 +368,44 @@ const generateAlias = () => {
 };
 
 const registerMapMode = (io: Server, socket: Socket) => {
+  // Helper to send room members list
+  const sendRoomMembers = (roomId: string) => {
+    const clients = io.sockets.adapter.rooms.get(roomId);
+    const roomMeta = state.mapRooms.get(roomId);
+    if (clients && roomMeta) {
+      const members = Array.from(clients).map((cid) => ({
+        socketId: cid,
+        alias: state.mapAliases.get(cid) || "Anonymous",
+        isCreator: cid === roomMeta.creatorId,
+      }));
+      io.to(roomId).emit("roomMembersUpdate", { roomId, members });
+    }
+  };
+
   // 1. Drop a pin / create a room
-  socket.on("createMapRoom", async ({ lat, lng, topic }) => {
-    console.log(`[createMapRoom] lat: ${lat}, lng: ${lng}, topic: ${topic}`);
+  socket.on("createMapRoom", async ({ lat, lng, topic, isPrivate }) => {
+    console.log(`[createMapRoom] lat: ${lat}, lng: ${lng}, topic: ${topic}, isPrivate: ${isPrivate}`);
     const userId = state.socketToUserId.get(socket.id) || socket.id;
     const roomId = `map-${userId}-${Date.now()}`;
     const alias = generateAlias();
     
     state.mapAliases.set(socket.id, alias);
     socket.join(roomId);
-    state.userRooms.set(socket.id, roomId);
+    
+    // Store metadata in memory
+    state.mapRooms.set(roomId, { creatorId: socket.id, isPrivate: !!isPrivate });
     
     try {
       await query(`
-        INSERT INTO "MapCluster" (id, lat, lng, location, topic, "creatorId", type, "updatedAt") 
-        VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), $4, $5, 'room', NOW())
-      `, [roomId, lat, lng, topic, socket.id]);
+        INSERT INTO "MapCluster" (id, lat, lng, location, topic, "creatorId", type, "isPrivate", "updatedAt") 
+        VALUES ($1, $2, $3, ST_SetSRID(ST_MakePoint($3, $2), 4326), $4, $5, 'room', $6, NOW())
+      `, [roomId, lat, lng, topic, socket.id, !!isPrivate]);
       
-      socket.emit("roomCreated", { roomId, alias });
-      socket.broadcast.emit("newMapUser", { id: roomId, lat, lng, topic, activeUsers: 1, type: 'room' });
+      socket.emit("roomCreated", { roomId, alias, isPrivate: !!isPrivate });
+      socket.broadcast.emit("newMapUser", { id: roomId, lat, lng, topic, activeUsers: 1, type: 'room', isPrivate: !!isPrivate });
+      
+      // Send initial members list
+      sendRoomMembers(roomId);
     } catch (err) {
       console.error("Map create error:", err);
     }
@@ -397,7 +416,7 @@ const registerMapMode = (io: Server, socket: Socket) => {
     console.log(`[fetchClusters] lat: ${lat}, lng: ${lng}, radius: ${radius}, topicFilter: ${topicFilter}`);
     try {
       let q = `
-        SELECT id, lat, lng, "activeUsers", topic, type, "creatorId"
+        SELECT id, lat, lng, "activeUsers", topic, type, "creatorId", "isPrivate"
         FROM "MapCluster"
         WHERE ST_DWithin(location, ST_SetSRID(ST_MakePoint($2, $1), 4326), $3)
           AND "updatedAt" > NOW() - INTERVAL '10 minutes'
@@ -406,9 +425,6 @@ const registerMapMode = (io: Server, socket: Socket) => {
       const params: any[] = [lat, lng, radius];
       
       if (topicFilter.trim() !== "") {
-        // If topicFilter is provided, we filter rooms by topic. 
-        // We probably also want to exclude 'person' types if they are searching for a specific topic,
-        // or just apply the ILIKE only on rooms.
         q += ` AND (type = 'person' OR topic ILIKE $4)`;
         params.push(`%${topicFilter.trim()}%`);
       }
@@ -450,6 +466,50 @@ const registerMapMode = (io: Server, socket: Socket) => {
     }
   });
 
+  // 2.7 Join a public room directly (no knocking needed)
+  socket.on("joinMapRoomDirect", async ({ roomId }) => {
+    console.log(`[joinMapRoomDirect] socket: ${socket.id}, room: ${roomId}`);
+    
+    // Check if room meta is in memory. If not, look up in DB
+    let roomMeta = state.mapRooms.get(roomId);
+    if (!roomMeta) {
+      try {
+        const res = await query(`SELECT "creatorId", "isPrivate" FROM "MapCluster" WHERE id = $1`, [roomId]);
+        if (res.rows[0]) {
+          roomMeta = { creatorId: res.rows[0].creatorId, isPrivate: !!res.rows[0].isPrivate };
+          state.mapRooms.set(roomId, roomMeta);
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    if (roomMeta && roomMeta.isPrivate) {
+      return socket.emit("knockRejected", { reason: "This campfire is private. Knocking required." });
+    }
+    
+    const alias = generateAlias();
+    state.mapAliases.set(socket.id, alias);
+    socket.join(roomId);
+    
+    try {
+      // Update DB count
+      await query(`UPDATE "MapCluster" SET "activeUsers" = "activeUsers" + 1, "updatedAt" = NOW() WHERE id = $1`, [roomId]);
+      
+      // Notify
+      io.to(roomId).emit("userJoinedMapRoom", { alias, message: `${alias} joined the campfire.` });
+      socket.emit("joinMapRoomSuccess", { roomId, alias });
+      
+      // Broadcast count update
+      io.emit("updateClusterCount", { roomId, increment: 1 });
+      
+      // Send updated member list
+      sendRoomMembers(roomId);
+    } catch (err) {
+      console.error("Join map room direct error:", err);
+    }
+  });
+
   // 3. Knock Feature
   socket.on("knockOnRoom", async ({ roomId }) => {
     try {
@@ -473,7 +533,6 @@ const registerMapMode = (io: Server, socket: Socket) => {
         const alias = generateAlias();
         state.mapAliases.set(knockerId, alias);
         knockerSocket.join(roomId);
-        state.userRooms.set(knockerId, roomId);
         
         // Update DB count
         await query(`UPDATE "MapCluster" SET "activeUsers" = "activeUsers" + 1, "updatedAt" = NOW() WHERE id = $1`, [roomId]);
@@ -484,9 +543,40 @@ const registerMapMode = (io: Server, socket: Socket) => {
         
         // Broadcast new count to map
         io.emit("updateClusterCount", { roomId, increment: 1 });
+        
+        // Send updated member list
+        sendRoomMembers(roomId);
       }
     } else {
       io.to(knockerId).emit("knockRejected", { reason: "The vibe wasn't a match." });
+    }
+  });
+
+  // 4.5 Creator kick a user
+  socket.on("kickUser", async ({ roomId, targetSocketId }) => {
+    const roomMeta = state.mapRooms.get(roomId);
+    if (!roomMeta || roomMeta.creatorId !== socket.id) return; // Only creator can kick
+    
+    const targetSocket = io.sockets.sockets.get(targetSocketId);
+    if (targetSocket) {
+      const alias = state.mapAliases.get(targetSocketId) || "Anonymous";
+      targetSocket.leave(roomId);
+      targetSocket.emit("kickedFromRoom", { roomId, reason: "You were kicked by the Campfire creator." });
+      
+      // Notify the room
+      io.to(roomId).emit("receiveMapMessage", { 
+        sender: "System", 
+        message: `${alias} was removed from the campfire by the creator.`, 
+        timestamp: Date.now() 
+      });
+      
+      try {
+        await query(`UPDATE "MapCluster" SET "activeUsers" = "activeUsers" - 1 WHERE id = $1`, [roomId]);
+        io.emit("updateClusterCount", { roomId, increment: -1 });
+        sendRoomMembers(roomId);
+      } catch (err) {
+        console.error(err);
+      }
     }
   });
 
@@ -500,39 +590,84 @@ const registerMapMode = (io: Server, socket: Socket) => {
   });
 
   // 6. Leave room (One and done)
-  const handleLeaveMapRoom = async (sId: string) => {
-    const roomId = state.userRooms.get(sId);
-    if (roomId && roomId.startsWith("map-")) {
-      const alias = state.mapAliases.get(sId);
-      io.to(roomId).emit("receiveMapMessage", { sender: "System", message: `${alias} left the campfire.`, timestamp: Date.now() });
+  const handleLeaveMapRoom = async (sId: string, customRoomId?: string) => {
+    const socketInstance = io.sockets.sockets.get(sId);
+    const roomsToLeave = customRoomId ? [customRoomId] : Array.from(socketInstance?.rooms || []).filter(r => r.startsWith("map-"));
+    
+    for (const roomId of roomsToLeave) {
+      const alias = state.mapAliases.get(sId) || "Anonymous";
+      let roomMeta = state.mapRooms.get(roomId);
       
-      io.sockets.sockets.get(sId)?.leave(roomId);
-      state.userRooms.delete(sId);
-      state.mapAliases.delete(sId);
-      
-      try {
-        const res = await query(`UPDATE "MapCluster" SET "activeUsers" = "activeUsers" - 1 WHERE id = $1 RETURNING "activeUsers"`, [roomId]);
-        const count = res.rows[0]?.activeUsers;
-        
-        if (count <= 0) {
-          await query(`DELETE FROM "MapCluster" WHERE id = $1`, [roomId]);
-          io.emit("removeMapUser", { id: roomId }); // Tell map to remove pin
-        } else {
-          io.emit("updateClusterCount", { roomId, increment: -1 });
+      if (!roomMeta) {
+        // Fallback check in DB
+        try {
+          const res = await query(`SELECT "creatorId", "isPrivate" FROM "MapCluster" WHERE id = $1`, [roomId]);
+          if (res.rows[0]) {
+            roomMeta = { creatorId: res.rows[0].creatorId, isPrivate: !!res.rows[0].isPrivate };
+            state.mapRooms.set(roomId, roomMeta);
+          }
+        } catch (err) {
+          console.error(err);
         }
-      } catch (err) {
-        console.error(err);
+      }
+
+      if (roomMeta) {
+        // If private room and creator leaves -> Destroy room
+        if (roomMeta.isPrivate && roomMeta.creatorId === sId) {
+          io.to(roomId).emit("roomDestroyed", { roomId, reason: "The creator has left the private campfire." });
+          
+          // Force all sockets inside the room to leave
+          const clients = io.sockets.adapter.rooms.get(roomId);
+          if (clients) {
+            for (const cid of Array.from(clients)) {
+              const clientSocket = io.sockets.sockets.get(cid);
+              clientSocket?.leave(roomId);
+              state.mapAliases.delete(cid);
+            }
+          }
+          
+          state.mapRooms.delete(roomId);
+          
+          try {
+            await query(`DELETE FROM "MapCluster" WHERE id = $1`, [roomId]);
+            io.emit("removeMapUser", { id: roomId }); // Tell map to remove pin
+          } catch (err) {
+            console.error(err);
+          }
+        } else {
+          // Regular member leaves, or creator of public campfire leaves
+          io.to(roomId).emit("receiveMapMessage", { sender: "System", message: `${alias} left the campfire.`, timestamp: Date.now() });
+          socketInstance?.leave(roomId);
+          
+          try {
+            const res = await query(`UPDATE "MapCluster" SET "activeUsers" = "activeUsers" - 1 WHERE id = $1 RETURNING "activeUsers"`, [roomId]);
+            const count = res.rows[0]?.activeUsers;
+            
+            if (count <= 0) {
+              await query(`DELETE FROM "MapCluster" WHERE id = $1`, [roomId]);
+              state.mapRooms.delete(roomId);
+              io.emit("removeMapUser", { id: roomId });
+            } else {
+              io.emit("updateClusterCount", { roomId, increment: -1 });
+              sendRoomMembers(roomId);
+            }
+          } catch (err) {
+            console.error(err);
+          }
+        }
       }
     }
   };
 
-  socket.on("leaveMapRoom", () => handleLeaveMapRoom(socket.id));
+  socket.on("leaveMapRoom", ({ roomId }) => handleLeaveMapRoom(socket.id, roomId));
+  
+  socket.on("disconnecting", async () => {
+    // Clean up active campfire rooms before socket leaves rooms list
+    await handleLeaveMapRoom(socket.id);
+  });
   
   socket.on("disconnect", async () => {
-    // 1. Clean up active room if any
-    await handleLeaveMapRoom(socket.id);
-    
-    // 2. Clean up person broadcast
+    // Clean up person broadcast
     const userId = state.socketToUserId.get(socket.id) || socket.id;
     try {
       const res = await query(`DELETE FROM "MapCluster" WHERE id = $1 AND type = 'person' RETURNING id`, [userId]);

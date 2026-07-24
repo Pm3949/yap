@@ -8,6 +8,7 @@ export const state = {
   userRooms: new Map<string, string>(),
   socketToUserId: new Map<string, string>(),
   mapAliases: new Map<string, string>(), // Maps socket.id to Dynamic Alias
+  mapRooms: new Map<string, { creatorId: string; isPrivate: boolean }>(), // Maps roomId to creator and privacy settings
 };
 
 // Helper function used across multiple socket events

@@ -1,33 +1,52 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Send, LogOut } from "lucide-react";
+import { Send, LogOut, Users, ShieldAlert, X } from "lucide-react";
 import { Socket } from "socket.io-client";
 
 interface MapChatRoomProps {
   socket: Socket;
   roomId: string;
   myAlias: string;
+  isPrivate: boolean;
   onLeave: () => void;
 }
 
-export default function MapChatRoom({ socket, roomId, myAlias, onLeave }: MapChatRoomProps) {
+interface Member {
+  socketId: string;
+  alias: string;
+  isCreator: boolean;
+}
+
+export default function MapChatRoom({ socket, roomId, myAlias, isPrivate, onLeave }: MapChatRoomProps) {
   const [messages, setMessages] = useState<{sender: string, message: string, timestamp: number}[]>([]);
   const [input, setInput] = useState("");
+  const [members, setMembers] = useState<Member[]>([]);
+  const [showMembers, setShowMembers] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleMsg = (data: any) => setMessages(prev => [...prev, data]);
     const handleJoin = (data: any) => setMessages(prev => [...prev, { sender: "System", message: data.message, timestamp: Date.now() }]);
+    const handleMembers = (data: { roomId: string, members: Member[] }) => {
+      if (data.roomId === roomId) {
+        setMembers(data.members);
+      }
+    };
     
     socket.on("receiveMapMessage", handleMsg);
     socket.on("userJoinedMapRoom", handleJoin);
+    socket.on("roomMembersUpdate", handleMembers);
+
+    // Request members list on mount
+    socket.emit("requestRoomMembers", { roomId });
 
     return () => {
       socket.off("receiveMapMessage", handleMsg);
       socket.off("userJoinedMapRoom", handleJoin);
+      socket.off("roomMembersUpdate", handleMembers);
     };
-  }, [socket]);
+  }, [socket, roomId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -41,32 +60,93 @@ export default function MapChatRoom({ socket, roomId, myAlias, onLeave }: MapCha
   };
 
   const leaveRoom = () => {
-    socket.emit("leaveMapRoom");
+    socket.emit("leaveMapRoom", { roomId });
     onLeave();
   };
 
+  const kickUser = (targetSocketId: string) => {
+    socket.emit("kickUser", { roomId, targetSocketId });
+  };
+
+  const myMember = members.find(m => m.socketId === socket.id);
+  const isRoomCreator = myMember?.isCreator;
+
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-full max-w-lg bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden z-40 transition-all duration-300" style={{ height: '400px' }}>
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-full max-w-lg bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 rounded-2xl shadow-2xl flex flex-col overflow-hidden z-40 transition-all duration-300 relative" style={{ height: '400px' }}>
       {/* Header */}
       <div className="bg-slate-800/80 px-4 py-3 flex justify-between items-center border-b border-slate-700/50">
         <div>
-          <h3 className="font-bold text-white text-sm">Ephemeral Campfire</h3>
-          <p className="text-xs text-emerald-400">You are {myAlias}</p>
+          <h3 className="font-bold text-white text-sm">Campfire Room</h3>
+          <p className="text-xs text-emerald-400">You are {myAlias} {isRoomCreator && "(Creator)"}</p>
         </div>
-        <button 
-          onClick={leaveRoom}
-          className="text-slate-400 hover:text-rose-400 transition-colors flex items-center gap-1 text-xs font-medium bg-slate-800 px-3 py-1.5 rounded-full"
-        >
-          <LogOut className="w-3 h-3" />
-          Leave & Forget
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowMembers(!showMembers)}
+            className={`p-1.5 rounded-full transition-colors relative ${showMembers ? 'bg-orange-500/20 text-orange-400' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
+            title="Room Members"
+          >
+            <Users className="w-4 h-4" />
+            {members.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-orange-600 text-white text-[9px] font-bold rounded-full w-4 h-4 flex items-center justify-center">
+                {members.length}
+              </span>
+            )}
+          </button>
+          <button 
+            onClick={leaveRoom}
+            className="text-slate-400 hover:text-rose-400 transition-colors flex items-center gap-1 text-xs font-medium bg-slate-800 px-3 py-1.5 rounded-full"
+          >
+            <LogOut className="w-3 h-3" />
+            Leave
+          </button>
+        </div>
       </div>
+
+      {/* Members overlay list */}
+      {showMembers && (
+        <div className="absolute inset-x-0 top-[53px] bottom-0 bg-slate-950/95 backdrop-blur-md z-50 p-4 flex flex-col transition-all duration-300">
+          <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-2">
+            <h4 className="font-bold text-sm text-white flex items-center gap-2">
+              <Users className="w-4 h-4 text-orange-500" />
+              Campfire Members ({members.length})
+            </h4>
+            <button onClick={() => setShowMembers(false)} className="text-slate-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="flex-1 overflow-y-auto space-y-2">
+            {members.map((m) => (
+              <div key={m.socketId} className="flex justify-between items-center p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-zinc-300">
+                    {m.alias} {m.socketId === socket.id && "(You)"}
+                  </span>
+                  {m.isCreator && (
+                    <span className="text-[10px] bg-orange-500/20 text-orange-400 px-2 py-0.5 rounded font-semibold border border-orange-500/30">
+                      Creator
+                    </span>
+                  )}
+                </div>
+                {isRoomCreator && !m.isCreator && isPrivate && (
+                  <button
+                    onClick={() => kickUser(m.socketId)}
+                    className="text-xs bg-red-950/40 border border-red-900 hover:bg-red-900/60 text-red-400 hover:text-white px-3 py-1.5 rounded-lg flex items-center gap-1 transition-all"
+                  >
+                    <ShieldAlert className="w-3 h-3" />
+                    Kick
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
         <div className="text-center my-2">
           <span className="text-xs text-slate-500 bg-slate-800/50 px-3 py-1 rounded-full">
-            Room history is deleted when the last person leaves.
+            {isPrivate ? "Private Room: Invitation only." : "Public Room: Anyone can join."}
           </span>
         </div>
         {messages.map((m, i) => (

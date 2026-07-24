@@ -20,9 +20,11 @@ export default function MapPage() {
   
   // Phase 2 State
   const [isGhost, setIsGhost] = useState(false);
+  const [joinedRooms, setJoinedRooms] = useState<Array<{ roomId: string; topic: string; myAlias: string; isPrivate: boolean }>>([]);
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [myAlias, setMyAlias] = useState<string>("");
   const [topicInput, setTopicInput] = useState("");
+  const [isPrivateInput, setIsPrivateInput] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   
   // Knock State
@@ -94,6 +96,23 @@ export default function MapPage() {
 
     socket.on("knockAccepted", ({ roomId, alias }) => {
       setIsWaitingForKnock(false);
+      const cluster = activeClusters.find(c => c.id === roomId);
+      const topic = cluster?.topic || "Campfire";
+      setJoinedRooms(prev => {
+        if (prev.some(r => r.roomId === roomId)) return prev;
+        return [...prev, { roomId, topic, myAlias: alias, isPrivate: true }];
+      });
+      setActiveRoomId(roomId);
+      setMyAlias(alias);
+    });
+
+    socket.on("joinMapRoomSuccess", ({ roomId, alias }) => {
+      const cluster = activeClusters.find(c => c.id === roomId);
+      const topic = cluster?.topic || "Campfire";
+      setJoinedRooms(prev => {
+        if (prev.some(r => r.roomId === roomId)) return prev;
+        return [...prev, { roomId, topic, myAlias: alias, isPrivate: false }];
+      });
       setActiveRoomId(roomId);
       setMyAlias(alias);
     });
@@ -103,11 +122,28 @@ export default function MapPage() {
       alert("Knock rejected: " + reason);
     });
 
-    socket.on("roomCreated", ({ roomId, alias }) => {
+    socket.on("roomCreated", ({ roomId, alias, isPrivate }) => {
+      setJoinedRooms(prev => {
+        if (prev.some(r => r.roomId === roomId)) return prev;
+        return [...prev, { roomId, topic: topicInput || "My Campfire", myAlias: alias, isPrivate }];
+      });
       setActiveRoomId(roomId);
       setMyAlias(alias);
       setIsCreating(false);
       setTopicInput("");
+      setIsPrivateInput(false);
+    });
+
+    socket.on("roomDestroyed", ({ roomId, reason }) => {
+      alert(reason || "The campfire was deleted by the creator.");
+      setJoinedRooms(prev => prev.filter(r => r.roomId !== roomId));
+      setActiveRoomId(prev => prev === roomId ? null : prev);
+    });
+
+    socket.on("kickedFromRoom", ({ roomId, reason }) => {
+      alert(reason || "You were removed from this campfire.");
+      setJoinedRooms(prev => prev.filter(r => r.roomId !== roomId));
+      setActiveRoomId(prev => prev === roomId ? null : prev);
     });
 
     return () => {
@@ -119,8 +155,11 @@ export default function MapPage() {
       socket.off("knockAccepted");
       socket.off("knockRejected");
       socket.off("roomCreated");
+      socket.off("joinMapRoomSuccess");
+      socket.off("roomDestroyed");
+      socket.off("kickedFromRoom");
     };
-  }, [searchRadius, searchTopic, userLocation]);
+  }, [searchRadius, searchTopic, userLocation, activeClusters, topicInput]);
 
   // Handle manual refetch when filters change
   useEffect(() => {
@@ -132,7 +171,15 @@ export default function MapPage() {
   const handleCreateCampfire = (e: React.FormEvent) => {
     e.preventDefault();
     if (!userLocation || !topicInput.trim()) return;
-    socket.emit("createMapRoom", { lat: userLocation[0], lng: userLocation[1], topic: topicInput });
+    if (joinedRooms.length >= 3) {
+      return alert("You can only join/create up to 3 campfires at a time. Leave a campfire first!");
+    }
+    socket.emit("createMapRoom", { 
+      lat: userLocation[0], 
+      lng: userLocation[1], 
+      topic: topicInput,
+      isPrivate: isPrivateInput 
+    });
     if (isBroadcasting) toggleBroadcast(); // Stop generic broadcast if creating a room
   };
 
@@ -158,9 +205,25 @@ export default function MapPage() {
   };
 
   const handleJoinCluster = (clusterId: string) => {
-    if (activeRoomId) return alert("You are already in a campfire!");
-    setIsWaitingForKnock(true);
-    socket.emit("knockOnRoom", { roomId: clusterId });
+    const cluster = activeClusters.find(c => c.id === clusterId);
+    if (!cluster) return;
+
+    if (joinedRooms.some(r => r.roomId === clusterId)) {
+      // Already joined, switch to it
+      setActiveRoomId(clusterId);
+      return;
+    }
+
+    if (joinedRooms.length >= 3) {
+      return alert("You can only join up to 3 campfires at a time. Leave a campfire first!");
+    }
+
+    if (cluster.isPrivate) {
+      setIsWaitingForKnock(true);
+      socket.emit("knockOnRoom", { roomId: clusterId });
+    } else {
+      socket.emit("joinMapRoomDirect", { roomId: clusterId });
+    }
   };
 
   const handleKnockAccept = () => {
@@ -299,31 +362,80 @@ export default function MapPage() {
         )}
 
         {/* Bottom Controls */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md px-4 pointer-events-none z-30">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 w-full max-w-md px-4 pointer-events-auto z-30 flex flex-col items-center">
+          {/* Campfire Tabs */}
+          {joinedRooms.length > 0 && (
+            <div className="flex items-center gap-1.5 bg-slate-900/90 backdrop-blur border border-slate-800 p-1.5 rounded-full mb-3 overflow-x-auto max-w-full pointer-events-auto shadow-2xl">
+              {joinedRooms.map((room) => (
+                <button
+                  key={room.roomId}
+                  onClick={() => {
+                    setActiveRoomId(room.roomId);
+                    setMyAlias(room.myAlias);
+                  }}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${
+                    activeRoomId === room.roomId
+                      ? "bg-orange-600 text-white shadow-lg shadow-orange-600/30"
+                      : "bg-slate-800/60 text-slate-400 hover:text-white hover:bg-slate-850"
+                  }`}
+                >
+                  <span>{room.isPrivate ? "🔒" : "🔥"}</span>
+                  <span>{room.topic}</span>
+                </button>
+              ))}
+            </div>
+          )}
+
           {!activeRoomId && userLocation && !isGhost && (
-            <div className="pointer-events-auto flex flex-col items-center">
+            <div className="w-full flex flex-col items-center">
               {isCreating ? (
-                <form onSubmit={handleCreateCampfire} className="bg-slate-900/90 backdrop-blur-xl border border-slate-700 p-2 rounded-full shadow-2xl flex items-center gap-2 w-full animate-in slide-in-from-bottom-4">
-                  <input 
-                    autoFocus
-                    type="text" 
-                    value={topicInput}
-                    onChange={e => setTopicInput(e.target.value)}
-                    placeholder="e.g., #LateNightCode, Deep Talks"
-                    className="flex-1 bg-transparent text-white text-sm px-4 focus:outline-none placeholder:text-slate-500"
-                    maxLength={30}
-                  />
-                  <button type="submit" className="bg-orange-600 hover:bg-orange-500 text-white rounded-full px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap">
-                    Start Fire
-                  </button>
-                  <button type="button" onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white p-2">
-                    <X className="w-4 h-4" />
-                  </button>
+                <form onSubmit={handleCreateCampfire} className="bg-slate-900/90 backdrop-blur-xl border border-slate-800 p-3 rounded-2xl shadow-2xl flex flex-col gap-2.5 w-full animate-in slide-in-from-bottom-4 pointer-events-auto">
+                  <div className="flex items-center gap-2">
+                    <input 
+                      autoFocus
+                      type="text" 
+                      value={topicInput}
+                      onChange={e => setTopicInput(e.target.value)}
+                      placeholder="Campfire Topic (e.g., Code & Coffee)"
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl text-white text-sm px-4 py-2 focus:outline-none focus:border-orange-500 placeholder:text-slate-600"
+                      maxLength={30}
+                    />
+                    <button type="button" onClick={() => setIsCreating(false)} className="text-slate-400 hover:text-white p-2">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-slate-800/60 pt-2 px-1">
+                    <div className="flex items-center gap-4">
+                      <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+                        <input
+                          type="radio"
+                          name="isPrivate"
+                          checked={!isPrivateInput}
+                          onChange={() => setIsPrivateInput(false)}
+                          className="accent-orange-500 w-3.5 h-3.5"
+                        />
+                        Public
+                      </label>
+                      <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer select-none">
+                        <input
+                          type="radio"
+                          name="isPrivate"
+                          checked={isPrivateInput}
+                          onChange={() => setIsPrivateInput(true)}
+                          className="accent-orange-500 w-3.5 h-3.5"
+                        />
+                        Private (🔒 Knock)
+                      </label>
+                    </div>
+                    <button type="submit" className="bg-orange-600 hover:bg-orange-500 text-white rounded-full px-5 py-2 text-xs font-bold transition-colors shadow-md shadow-orange-600/20">
+                      Start Fire
+                    </button>
+                  </div>
                 </form>
               ) : (
                 <button 
                   onClick={() => setIsCreating(true)}
-                  className="bg-orange-600 hover:bg-orange-500 text-white rounded-full px-6 py-3 font-semibold shadow-[0_0_20px_rgba(234,88,12,0.4)] transition-all hover:scale-105 flex items-center gap-2"
+                  className="bg-orange-600 hover:bg-orange-500 text-white rounded-full px-6 py-3 font-semibold shadow-[0_0_20px_rgba(234,88,12,0.4)] transition-all hover:scale-105 flex items-center gap-2 pointer-events-auto"
                 >
                   <Plus className="w-5 h-5" />
                   Create Campfire
@@ -333,12 +445,16 @@ export default function MapPage() {
           )}
 
           {activeRoomId && (
-            <div className="pointer-events-auto">
+            <div className="w-full">
               <MapChatRoom 
                 socket={socket} 
                 roomId={activeRoomId} 
-                myAlias={myAlias} 
-                onLeave={() => setActiveRoomId(null)} 
+                myAlias={joinedRooms.find(r => r.roomId === activeRoomId)?.myAlias || myAlias}
+                isPrivate={joinedRooms.find(r => r.roomId === activeRoomId)?.isPrivate || false} 
+                onLeave={() => {
+                  setJoinedRooms(prev => prev.filter(r => r.roomId !== activeRoomId));
+                  setActiveRoomId(null);
+                }} 
               />
             </div>
           )}
