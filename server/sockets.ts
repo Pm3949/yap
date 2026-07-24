@@ -370,6 +370,7 @@ const generateAlias = () => {
 const registerMapMode = (io: Server, socket: Socket) => {
   // 1. Drop a pin / create a room
   socket.on("createMapRoom", async ({ lat, lng, topic }) => {
+    console.log(`[createMapRoom] lat: ${lat}, lng: ${lng}, topic: ${topic}`);
     const userId = state.socketToUserId.get(socket.id) || socket.id;
     const roomId = `map-${userId}-${Date.now()}`;
     const alias = generateAlias();
@@ -393,6 +394,7 @@ const registerMapMode = (io: Server, socket: Socket) => {
 
   // 2. Fetch clusters in viewport
   socket.on("fetchClusters", async ({ lat, lng, radius = 50000, topicFilter = "" }) => {
+    console.log(`[fetchClusters] lat: ${lat}, lng: ${lng}, radius: ${radius}, topicFilter: ${topicFilter}`);
     try {
       let q = `
         SELECT id, lat, lng, "activeUsers", topic, type, "creatorId"
